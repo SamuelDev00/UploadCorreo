@@ -3,9 +3,7 @@ from bs4 import BeautifulSoup
 
 import Proxy
 
-import aiohttp
-from aiohttp_socks import ProxyConnector
-from python_socks import ProxyType
+import requests
 
 from random import random
 
@@ -32,51 +30,32 @@ class UclvClient(object):
     def __init__(self, user='', password='', proxy: Proxy=None):
         self.username = user
         self.password = password
-        self.session = None
+        self.session = requests.Session()
         self.url = 'https://correo.uclv.edu.cu/'
-        self.eventloop = None
-        self.proxy = proxy
+        self.proxy = None
+        if proxy:
+            self.proxy = proxy.as_dict_proxy()
         self.MaxTasks: int = 3
         self.TasksInProgress: int = 0
         self.headers = {"User-Agent":"Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.0.0 Safari/537.36"}
-    
-    async def construct(self):
-        self.eventloop = asyncio.get_event_loop()
-        connector = aiohttp.TCPConnector(verify_ssl=False)
-        if self.proxy:
-            connector = ProxyConnector(
-                proxy_type=ProxyType.SOCKS5,
-                host=self.proxy.ip,
-                port=self.proxy.port,
-                rdns=True,
-                verify_ssl=False
-            )
-        self.session = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True),connector=connector)
 
-    async def LogOut(self):
-        await self.session.close()
-        self.session = aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar(unsafe=True),connector=aiohttp.TCPConnector(verify_ssl=False))
 
-    #loguearse en la página
+    #iniciar sesión en la página
     async def login(self):
-        await self.construct()
         try:
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with self.session.get(self.url, headers=self.headers, timeout=timeout) as response:
-                resp = await response.text()
-            soup = BeautifulSoup(resp,'html.parser')
-            login_csrf = soup.find("input", attrs={"name": "login_csrf"})["value"]
+            resp = self.session.get(self.url, headers=self.headers, proxies=self.proxy)
+            soup = BeautifulSoup(resp.text,'html.parser')
+            login_csrf = soup.find('input', attrs={'name': 'login_csrf'})['value']
             payload = {'loginOp': 'login',
                        'login_csrf': login_csrf,
                        'username': self.username,
                        'password': self.password,
                        'zrememberme': 1,
                        'client': 'stantard'}
-            async with self.session.post(self.url, data=payload, headers=self.headers, timeout=timeout) as response2:
-                resp2 = await response2.text()
+            resp2 = self.session.post(self.url, data=payload, headers=self.headers, proxies=self.proxy)
             counter = 0
-            for i in resp2.splitlines():
-                if "ZLoginErrorPanel" in i or (0 < counter <= 3):
+            for i in resp2.text.splitlines():
+                if 'ZLoginErrorPanel' in i or (0 < counter <= 3):
                     counter += 1
                     print(i)
             if counter>0:
@@ -98,23 +77,19 @@ class UclvClient(object):
 
         try:
             url = self.url+'h/search?st=briefcase'
-            timeout = aiohttp.ClientTimeout(total=20)
-            async with self.session.get(url, headers=self.headers, timeout=timeout) as response:
-                resp = await response.text()
-            soup = BeautifulSoup(resp,'html.parser')
-            sc = soup.find("a", attrs={"id": "NEW_UPLOAD"})["href"].replace("?si=0&amp;so=0&amp;sc=","").replace("&amp;st=briefcase&amp;action=compose","")
+            resp = self.session.get(url, headers=self.headers, proxies=self.proxy)
+            soup = BeautifulSoup(resp.text,'html.parser')
+            sc = soup.find('a', attrs={'id': 'NEW_UPLOAD'})['href'].replace('?si=0&amp;so=0&amp;sc=','').replace('&amp;st=briefcase&amp;action=compose','')
             file = ProgressFile(filename=path, read_callback=progress_callback)
             #crear payload
-            data = aiohttp.FormData()
-            data.add_field('fileUpload', file)
-            data.add_field('actionAttachDone', 'Hecho')
-            data.add_field('doBriefcaseAction', '1')
-            data.add_field('sendUID', 'Hecho')
-            timeout = aiohttp.ClientTimeout(connect=30, total=60 * 60)
+            upload_file = {'fileUpload': file} #si quieres eliminar el progreso de subida, elimina la variable "file" y pon: open(path,'rb')
+            data = {'actionAttachDone': 'Hecho',
+                    'doBriefcaseAction': '1',
+                    'sendUID': 'Hecho'} 
+            print(f'Subiendo {path}...')
             url_post = self.url+f'h/search?si=0&so=0&sc={sc}' #smd
-            async with self.session.post(url_post, data=data, headers=self.headers, timeout=timeout) as response2:
-                resp2 = await response2.text()
-            if Path(path).name in resp2:
+            resp2 = self.session.post(url_post, files=upload_file, data=data, headers=self.headers, proxies=self.proxy)
+            if Path(path).name in resp2.text:
                 return 'https://correo.uclv.edu.cu/home/'+self.username+'/Briefcase/'+Path(path).name+'?auth=co'
         except Exception as ex:
             print(ex)
@@ -122,6 +97,6 @@ class UclvClient(object):
         self.TasksInProgress -= 1
 
 #client = UclvClient('correo@uclv.cu','contraseña')
-#loged = asyncio.run(client.login())
-#if loged is True:
-    #asyncio.run(client.upload_file('file.txt'))
+#loged = await client.login()
+#if loged:
+    #await client.upload_file('file.txt')
